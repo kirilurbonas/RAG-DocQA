@@ -5,7 +5,7 @@ import uuid
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.models.embedding_model import EmbeddingModel
@@ -125,7 +125,7 @@ class RAGService:
                 'document_id': document_id,
                 'owner_id': owner_id,
                 'filename': filename,
-                'uploaded_at': datetime.utcnow().isoformat()
+                'uploaded_at': datetime.now(timezone.utc).isoformat()
             })
             metadatas.append(metadata)
             ids.append(f"{document_id}_chunk_{i}")
@@ -197,7 +197,7 @@ class RAGService:
                 'document_id': document_id,
                 'owner_id': owner_id,
                 'filename': filename,
-                'uploaded_at': datetime.utcnow().isoformat()
+                'uploaded_at': datetime.now(timezone.utc).isoformat()
             })
             metadatas.append(metadata)
             ids.append(f"{document_id}_chunk_{i}")
@@ -478,7 +478,15 @@ class RAGService:
         return True
     
     def get_stats(self, owner_id: str = "anonymous") -> Dict:
-        """Get service statistics."""
+        """
+        Get service statistics for the current user/tenant.
+
+        Args:
+            owner_id: Owner ID to filter statistics for
+
+        Returns:
+            Dictionary with statistics including document count, model info
+        """
         user_document_count = len(
             [doc for doc in self.documents.values() if doc.get("owner_id") == owner_id]
         )
