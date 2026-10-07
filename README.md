@@ -7,15 +7,47 @@ An intelligent document question-answering system built with RAG (Retrieval-Augm
 - **Document Processing**: Support for PDF, DOCX, Markdown, and TXT files
 - **Intelligent Chunking**: Automatic text chunking with overlap for better context
 - **Vector Search**: Semantic search using embeddings and ChromaDB
-- **LLM Integration**: Support for OpenAI and local LLM models
-- **Streaming Responses**: Real-time streaming of AI responses
+- **LLM Integration**: Support for OpenAI and local LLM models with timeout & retry handling
+- **Streaming Responses**: Real-time streaming of AI responses (fixed for multi-line text)
 - **Source Citations**: Track which documents and chunks were used for answers
 - **Modern UI**: Beautiful, responsive React frontend
 - **RESTful API**: FastAPI backend with comprehensive endpoints
 - **Docker Support**: Easy deployment with Docker Compose
 
+### 🔒 Reliability & Production Features (v1.1+)
+
+- **Persistent Document Registry**: Documents survive restarts and are consistent across workers
+- **Non-blocking Async Operations**: All I/O operations use async/await to prevent event loop stalling
+- **OpenAI Resilience**: 30-second timeout + automatic 2x retry with exponential backoff
+- **Real Health Checks**: `/health` endpoint verifies all components (embedding model, vector store)
+- **Comprehensive Test Coverage**: 30%+ coverage on critical paths with pytest
+- **Configuration Validation**: Type-safe environment variables with Pydantic
+- **Enterprise Auth**: JWT, API key, and tenant isolation support
+- **Rate Limiting**: Per-endpoint rate limits with proper client IP detection
+
+## 🎯 Recent Improvements (v1.1)
+
+**Critical Reliability Fixes:**
+- ✅ Fixed document data loss on restart (documents now persist)
+- ✅ Fixed event loop blocking (all I/O operations are now async)
+- ✅ Fixed streaming response text loss (JSON-encoded SSE frames)
+- ✅ Fixed rate limiting parameter bug (`_request` → `request`)
+- ✅ Added OpenAI timeout (30s) and retry handling (2x with backoff)
+- ✅ Upgraded dependencies with known CVE fixes
+- ✅ Implemented real health checks for all components
+
+**Testing & Quality:**
+- ✅ Added comprehensive pytest test suite (~500 lines)
+- ✅ Test coverage for auth, document processing, RAG service, API routes
+- ✅ CI/CD integration with automated test execution
+- ✅ Environment variable validation with Pydantic
+
+For detailed information, see [IMPROVEMENTS.md](IMPROVEMENTS.md).
+
 ## 📋 Table of Contents
 
+- [Features](#-features)
+- [Recent Improvements](#-recent-improvements-v11)
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
 - [Prerequisites](#prerequisites)
@@ -25,7 +57,9 @@ An intelligent document question-answering system built with RAG (Retrieval-Augm
 - [API Documentation](#api-documentation)
 - [Deployment](#deployment)
 - [Enterprise](#enterprise-hardening)
+- [Testing](#testing)
 - [Security](SECURITY.md)
+- [Improvements](IMPROVEMENTS.md)
 - [Development](#development)
 - [Future Improvements](#future-improvements)
 
@@ -383,15 +417,40 @@ portproj/
 
 ### Running Tests
 
-```bash
-# Backend tests (when implemented)
-cd backend
-pytest
+#### Backend Tests
 
-# Frontend tests (when implemented)
-cd frontend
-npm test
+```bash
+cd backend
+
+# Install test dependencies
+pip install -r requirements.txt
+
+# Run all tests
+pytest tests -v
+
+# Run specific test file
+pytest tests/test_auth.py -v
+
+# Run tests matching pattern
+pytest tests -k "persistence" -v
+
+# Run with coverage
+pytest tests --cov=app --cov-report=html
 ```
+
+**Test Coverage:**
+- `tests/test_auth.py`: JWT validation, tenant isolation, API key isolation
+- `tests/test_document_processor.py`: Text extraction, chunking edge cases
+- `tests/test_rag_service.py`: Registry persistence, document ownership
+- `tests/test_routes.py`: API endpoints, rate limiting, streaming
+
+#### Frontend Tests
+
+Frontend test suite coming soon.
+
+#### CI/CD Pipeline
+
+Tests are automatically run on every push to `main` or `develop` branches via GitHub Actions. See `.github/workflows/ci.yml`.
 
 ### Code Style
 
