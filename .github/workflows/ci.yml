@@ -28,11 +28,18 @@ jobs:
         cd backend
         python -m compileall app
 
+    - name: Unit tests
+      run: |
+        cd backend
+        pytest tests -v --tb=short
+      env:
+        OPENAI_API_KEY: test-key-sk-proj-12345
+
     - name: Dependency audit
       run: |
         pip install pip-audit
         pip-audit -r backend/requirements.txt
-    
+
     - name: Lint with flake8
       run: |
         cd backend
