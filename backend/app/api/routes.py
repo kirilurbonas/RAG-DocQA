@@ -1,11 +1,13 @@
 """API routes for the document Q&A system."""
 
+import json
 import logging
 import os
+from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -116,7 +118,7 @@ async def upload_document(
             raise HTTPException(status_code=413, detail="File too large")
 
         safe_name = sanitize_upload_filename(file.filename)
-        document_info = rag_service.process_and_store_document(
+        document_info = await rag_service.process_and_store_document_async(
             file_content=file_content,
             filename=safe_name,
             owner_id=owner_id,
@@ -153,7 +155,7 @@ async def upload_document(
 @router.get("/documents", response_model=List[DocumentResponse])
 @limiter.limit(RATE_LIMIT_READ)
 async def list_documents(
-    _request: Request,
+    request: Request,
     ctx: SecurityContext = Depends(get_security_context),
 ):
     """Get list of all uploaded documents for this tenant/user."""
@@ -164,7 +166,7 @@ async def list_documents(
 @router.get("/documents/{document_id}", response_model=DocumentResponse)
 @limiter.limit(RATE_LIMIT_READ)
 async def get_document(
-    _request: Request,
+    request: Request,
     document_id: str,
     ctx: SecurityContext = Depends(get_security_context),
 ):
@@ -262,10 +264,14 @@ async def ask_question_stream(
                 top_k=body.top_k,
                 owner_id=ctx.owner_id,
             ):
-                yield f"data: {token}\n\n"
-        except Exception:
+                # JSON-encode token to preserve newlines and special characters
+                payload = json.dumps({"token": token, "error": None})
+                yield f"data: {payload}\n\n"
+        except Exception as exc:
             logger.exception("Failed to stream answer")
-            yield "data: Error: Unable to generate streaming response\n\n"
+            # Send error as structured JSON
+            error_payload = json.dumps({"token": None, "error": str(exc)})
+            yield f"data: {error_payload}\n\n"
 
     return StreamingResponse(
         generate(),
@@ -298,5 +304,42 @@ async def get_stats(
 
 @router.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "service": "rag-docqa"}
+    """
+    Health check endpoint.
+
+    Returns 200 if all systems are ready, 503 if any system is unavailable.
+    """
+    health_status = {
+        "status": "healthy",
+        "service": "rag-docqa",
+        "timestamp": datetime.utcnow().isoformat(),
+        "checks": {}
+    }
+
+    try:
+        # Check embedding model
+        await rag_service.embedding_model.encode_async("health")
+        health_status["checks"]["embedding_model"] = "ok"
+    except Exception as e:
+        health_status["checks"]["embedding_model"] = f"error: {str(e)}"
+        health_status["status"] = "degraded"
+        logger.warning(f"Embedding model health check failed: {e}")
+
+    try:
+        # Check vector store (Chroma)
+        count = rag_service.vector_store.get_collection_stats()
+        health_status["checks"]["vector_store"] = "ok"
+    except Exception as e:
+        health_status["checks"]["vector_store"] = f"error: {str(e)}"
+        health_status["status"] = "degraded"
+        logger.warning(f"Vector store health check failed: {e}")
+
+    # Return appropriate status code
+    status_code = 200 if health_status["status"] == "healthy" else 503
+
+    from fastapi import Response
+    return Response(
+        content=json.dumps(health_status),
+        status_code=status_code,
+        media_type="application/json"
+    )

@@ -1,6 +1,7 @@
 """Embedding model for generating vector representations of text."""
 
 from typing import List, Union
+import asyncio
 import os
 from sentence_transformers import SentenceTransformer
 import numpy as np
@@ -46,13 +47,34 @@ class EmbeddingModel:
     def encode_batch(self, texts: List[str], batch_size: int = 32, normalize: bool = True) -> np.ndarray:
         """
         Generate embeddings for a batch of texts.
-        
+
         Args:
             texts: List of text strings
             batch_size: Number of texts to process at once
             normalize: Whether to normalize embeddings to unit length
-            
+
         Returns:
             Numpy array of embeddings (2D)
         """
         return self.encode(texts, normalize=normalize)
+
+    async def encode_async(self, texts: Union[str, List[str]], normalize: bool = True) -> np.ndarray:
+        """
+        Asynchronously generate embeddings for input text(s).
+
+        This runs the blocking encode call in a thread pool to avoid blocking the event loop.
+
+        Args:
+            texts: Single text string or list of text strings
+            normalize: Whether to normalize embeddings to unit length
+
+        Returns:
+            Numpy array of embeddings (1D for single text, 2D for list)
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            self.encode,
+            texts,
+            normalize
+        )

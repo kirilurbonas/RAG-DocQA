@@ -41,25 +41,29 @@ class OpenAIService(LLMService):
         "Cite document numbers used in the answer."
     )
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-3.5-turbo"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-3.5-turbo", timeout: int = 30, max_retries: int = 2):
         """
         Initialize OpenAI service.
-        
+
         Args:
             api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
             model: Model name to use
+            timeout: Request timeout in seconds
+            max_retries: Maximum number of retries for failed requests
         """
         try:
-            from openai import OpenAI
+            from openai import AsyncOpenAI
         except ImportError:
             raise ImportError("openai package is required. Install with: pip install openai")
-        
+
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OpenAI API key is required. Set OPENAI_API_KEY environment variable.")
-        
-        self.client = OpenAI(api_key=self.api_key)
+
+        # Use AsyncOpenAI for non-blocking async calls
+        self.client = AsyncOpenAI(api_key=self.api_key, timeout=timeout, max_retries=max_retries)
         self.model = model
+        self.timeout = timeout
     
     def _build_prompt(self, query: str, context: List[Dict[str, str]]) -> str:
         """Build the RAG prompt with context."""
@@ -120,14 +124,14 @@ Answer:"""
                 "Include document citations like [Document 1]."
             )
         })
-        
-        response = self.client.chat.completions.create(
+
+        response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=0.2,
             max_tokens=1000
         )
-        
+
         return response.choices[0].message.content
     
     async def stream_response(
@@ -166,16 +170,16 @@ Answer:"""
                 "Include document citations like [Document 1]."
             )
         })
-        
-        stream = self.client.chat.completions.create(
+
+        stream = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=0.2,
             max_tokens=1000,
             stream=True
         )
-        
-        for chunk in stream:
+
+        async for chunk in stream:
             if chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 

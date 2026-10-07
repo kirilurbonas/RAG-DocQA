@@ -2,12 +2,18 @@
 
 from typing import List, Dict, Optional, AsyncIterator
 import uuid
+import json
+import logging
+import os
 from datetime import datetime
+from pathlib import Path
 
 from app.models.embedding_model import EmbeddingModel
 from app.services.vector_store import VectorStore
 from app.services.llm_service import LLMService, get_llm_service
 from app.utils.document_processor import DocumentProcessor
+
+logger = logging.getLogger(__name__)
 
 
 class RAGService:
@@ -22,7 +28,7 @@ class RAGService:
     ):
         """
         Initialize RAG service.
-        
+
         Args:
             embedding_model_name: Name of the embedding model
             vector_store_path: Path to persist vector database
@@ -32,13 +38,121 @@ class RAGService:
         self.embedding_model = EmbeddingModel(model_name=embedding_model_name)
         self.vector_store = VectorStore(persist_directory=vector_store_path)
         self.document_processor = DocumentProcessor()
-        
+
         llm_kwargs = llm_kwargs or {}
         self.llm_service = get_llm_service(provider=llm_provider, **llm_kwargs)
-        
+
+        # Set up persistent document registry
+        self.vector_store_path = vector_store_path
+        self.registry_path = Path(vector_store_path) / "document_registry.json"
+
+        # Load document metadata from persistent storage
+        self.documents: Dict[str, Dict] = self._load_document_registry()
+
+    def _load_document_registry(self) -> Dict[str, Dict]:
+        """
+        Load document registry from persistent storage.
+
+        Returns:
+            Dictionary of documents, empty if file doesn't exist
+        """
+        if self.registry_path.exists():
+            try:
+                with open(self.registry_path, 'r') as f:
+                    registry = json.load(f)
+                    logger.info(f"Loaded document registry with {len(registry)} documents")
+                    return registry
+            except (json.JSONDecodeError, IOError) as e:
+                logger.error(f"Failed to load document registry: {e}")
+                return {}
+        return {}
+
+    def _save_document_registry(self) -> None:
+        """Save document registry to persistent storage."""
+        try:
+            # Ensure directory exists
+            self.registry_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.registry_path, 'w') as f:
+                json.dump(self.documents, f, indent=2)
+            logger.debug(f"Saved document registry with {len(self.documents)} documents")
+        except IOError as e:
+            logger.error(f"Failed to save document registry: {e}")
+
+    async def process_and_store_document_async(
+        self,
+        file_content: bytes,
+        filename: str,
+        document_id: Optional[str] = None,
+        owner_id: str = "anonymous",
+    ) -> Dict:
+        """
+        Asynchronously process a document and store it in the vector database.
+
+        This uses async encoding to avoid blocking the event loop.
+
+        Args:
+            file_content: Raw file content
+            filename: Original filename
+            document_id: Optional document ID (auto-generated if not provided)
+            owner_id: Owner ID for access control
+
+        Returns:
+            Dictionary with document info including ID and chunk count
+        """
+        if not self.document_processor.is_supported(filename):
+            raise ValueError(f"Unsupported file type: {filename}")
+
+        # Generate document ID
+        if document_id is None:
+            document_id = str(uuid.uuid4())
+
+        # Extract text
+        text = self.document_processor.extract_text(file_content, filename)
+
+        # Chunk text
+        chunks = self.document_processor.chunk_text(text)
+
+        # Generate embeddings (async to avoid blocking event loop)
+        chunk_texts = [chunk['text'] for chunk in chunks]
+        embeddings = await self.embedding_model.encode_async(chunk_texts)
+
+        # Prepare metadata
+        metadatas = []
+        ids = []
+        for i, chunk in enumerate(chunks):
+            metadata = chunk['metadata'].copy()
+            metadata.update({
+                'document_id': document_id,
+                'owner_id': owner_id,
+                'filename': filename,
+                'uploaded_at': datetime.utcnow().isoformat()
+            })
+            metadatas.append(metadata)
+            ids.append(f"{document_id}_chunk_{i}")
+
+        # Store in vector database
+        self.vector_store.add_documents(
+            texts=chunk_texts,
+            embeddings=embeddings,
+            metadatas=metadatas,
+            ids=ids
+        )
+
         # Store document metadata
-        self.documents: Dict[str, Dict] = {}
-    
+        self.documents[document_id] = {
+            'id': document_id,
+            'owner_id': owner_id,
+            'filename': filename,
+            'uploaded_at': datetime.utcnow().isoformat(),
+            'chunk_count': len(chunks),
+            'text_length': len(text)
+        }
+
+        # Persist to disk
+        self._save_document_registry()
+
+        return self.documents[document_id]
+
     def process_and_store_document(
         self,
         file_content: bytes,
@@ -105,7 +219,10 @@ class RAGService:
             'chunk_count': len(chunks),
             'text_length': len(text)
         }
-        
+
+        # Persist to disk
+        self._save_document_registry()
+
         return self.documents[document_id]
     
     async def answer_question(
@@ -118,18 +235,18 @@ class RAGService:
     ) -> Dict:
         """
         Answer a question using RAG.
-        
+
         Args:
             question: User's question
             document_ids: Optional list of document IDs to search within
             top_k: Number of relevant chunks to retrieve
             conversation_history: Optional conversation history
-            
+
         Returns:
             Dictionary with answer, sources, and metadata
         """
-        # Generate query embedding
-        query_embedding = self.embedding_model.encode(question)
+        # Generate query embedding (async to avoid blocking event loop)
+        query_embedding = await self.embedding_model.encode_async(question)
         
         # Build filter if document_ids provided
         if document_ids:
@@ -168,14 +285,14 @@ class RAGService:
                     {"document_id": {"$in": owned_doc_ids}},
                 ]
             }
-        
-        # Search for relevant chunks
-        relevant_chunks = self.vector_store.search(
+
+        # Search for relevant chunks (async to avoid blocking event loop)
+        relevant_chunks = await self.vector_store.search_async(
             query_embedding=query_embedding,
             n_results=top_k,
             filter_metadata=filter_metadata
         )
-        
+
         if not relevant_chunks:
             return {
                 'answer': "I couldn't find any relevant information in the documents to answer your question.",
@@ -184,7 +301,7 @@ class RAGService:
                     'chunks_retrieved': 0
                 }
             }
-        
+
         # Prepare context for LLM
         context = [
             {
@@ -194,7 +311,7 @@ class RAGService:
             }
             for chunk in relevant_chunks
         ]
-        
+
         # Generate answer using LLM
         answer = await self.llm_service.generate_response(
             query=question,
@@ -238,18 +355,18 @@ class RAGService:
     ) -> AsyncIterator[str]:
         """
         Stream answer tokens.
-        
+
         Args:
             question: User's question
             document_ids: Optional list of document IDs to search within
             top_k: Number of relevant chunks to retrieve
             conversation_history: Optional conversation history
-            
+
         Yields:
             Answer tokens as strings
         """
-        # Generate query embedding
-        query_embedding = self.embedding_model.encode(question)
+        # Generate query embedding (async to avoid blocking event loop)
+        query_embedding = await self.embedding_model.encode_async(question)
         
         # Build filter if document_ids provided
         if document_ids:
@@ -282,18 +399,18 @@ class RAGService:
                     {"document_id": {"$in": owned_doc_ids}},
                 ]
             }
-        
-        # Search for relevant chunks
-        relevant_chunks = self.vector_store.search(
+
+        # Search for relevant chunks (async to avoid blocking event loop)
+        relevant_chunks = await self.vector_store.search_async(
             query_embedding=query_embedding,
             n_results=top_k,
             filter_metadata=filter_metadata
         )
-        
+
         if not relevant_chunks:
             yield "I couldn't find any relevant information in the documents to answer your question."
             return
-        
+
         # Prepare context
         context = [
             {
@@ -303,7 +420,7 @@ class RAGService:
             }
             for chunk in relevant_chunks
         ]
-        
+
         # Stream answer
         async for token in self.llm_service.stream_response(
             query=question,
@@ -354,7 +471,10 @@ class RAGService:
         
         # Remove from documents dict
         del self.documents[document_id]
-        
+
+        # Persist to disk
+        self._save_document_registry()
+
         return True
     
     def get_stats(self, owner_id: str = "anonymous") -> Dict:

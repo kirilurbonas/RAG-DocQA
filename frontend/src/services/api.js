@@ -110,21 +110,53 @@ export const qaAPI = {
     }
 
     const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+    const decoder = new TextDecoder('utf-8', { fatal: false });
+    let buffer = '';
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+
+      // Keep the last incomplete line in the buffer
+      buffer = lines.pop() || '';
 
       for (const line of lines) {
         if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          if (data && onChunk) {
-            onChunk(data);
+          const jsonStr = line.slice(6);
+          if (jsonStr) {
+            try {
+              const parsed = JSON.parse(jsonStr);
+              if (parsed.error) {
+                throw new Error(parsed.error);
+              }
+              if (parsed.token && onChunk) {
+                onChunk(parsed.token);
+              }
+            } catch (e) {
+              throw new Error(`Failed to parse stream response: ${e.message}`);
+            }
           }
+        }
+      }
+    }
+
+    // Handle final buffer content if any
+    if (buffer && buffer.startsWith('data: ')) {
+      const jsonStr = buffer.slice(6);
+      if (jsonStr) {
+        try {
+          const parsed = JSON.parse(jsonStr);
+          if (parsed.error) {
+            throw new Error(parsed.error);
+          }
+          if (parsed.token && onChunk) {
+            onChunk(parsed.token);
+          }
+        } catch (e) {
+          throw new Error(`Failed to parse stream response: ${e.message}`);
         }
       }
     }

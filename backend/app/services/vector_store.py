@@ -1,6 +1,7 @@
 """Vector store service for managing document embeddings and similarity search."""
 
 from typing import List, Dict, Optional, Tuple
+import asyncio
 import chromadb
 from chromadb.config import Settings
 import numpy as np
@@ -134,3 +135,31 @@ class VectorStore:
             'total_documents': count,
             'collection_name': self.collection_name
         }
+
+    async def search_async(
+        self,
+        query_embedding: np.ndarray,
+        n_results: int = 5,
+        filter_metadata: Optional[Dict] = None
+    ) -> List[Dict]:
+        """
+        Asynchronously search for similar documents.
+
+        This runs the blocking search call in a thread pool to avoid blocking the event loop.
+
+        Args:
+            query_embedding: Query embedding vector (1D or 2D)
+            n_results: Number of results to return
+            filter_metadata: Optional metadata filter
+
+        Returns:
+            List of dictionaries with 'text', 'metadata', 'distance', and 'id' keys
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            self.search,
+            query_embedding,
+            n_results,
+            filter_metadata
+        )
