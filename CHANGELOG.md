@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-10-08
+
+### Added
+
+#### Document Management
+- **Document Search/Filtering**: Filter documents by filename with case-insensitive partial matching
+  - `GET /documents?q=search_term` returns matching documents
+  - Sorted by upload date (newest first)
+  - Only returns latest version by default
+
+- **Document Versioning**: Automatic version tracking for re-uploaded documents
+  - Re-upload same filename creates new version (auto-incremented)
+  - Previous versions marked as `is_latest=false`
+  - All versions remain searchable in vector store
+  - Includes version metadata in document info
+
+- **Extended File Type Support**:
+  - Excel files (.xlsx) via openpyxl
+  - PowerPoint files (.pptx) via python-pptx
+  - Safe extraction with decompression bomb protection
+  - Text-only extraction (no formulas, macros, or code)
+  - Respects MAX_EXTRACTED_TEXT_CHARS limits
+
+#### Conversation History
+- **Conversation Management**: Persistent conversation storage per user/tenant
+  - `POST /conversations` - Create new conversation
+  - `GET /conversations` - List conversations with pagination
+  - `GET /conversations/{id}` - Get conversation with full message history
+  - `POST /conversations/{id}/messages` - Add message to conversation
+  - `DELETE /conversations/{id}` - Delete conversation
+
+- **Features**:
+  - JSON-based persistence in `./conversations/{owner_id}/`
+  - Messages in OpenAI format (role, content, timestamp)
+  - Ownership isolation (users only access their own conversations)
+  - Conversation titles and metadata tracking
+  - Durable persistence across restarts
+
+### Changed
+- `get_documents()` now supports `latest_only` parameter (default: True)
+- Requirements updated with optional Excel/PowerPoint libraries
+
+### Documentation
+- Added comprehensive FEATURES.md documenting all v1.2.0 features
+- Updated README.md with v1.2.0 feature list and future roadmap
+- Added usage examples for all new API endpoints
+
+---
+
 ## [1.1.0] - 2025-10-07
 
 ### 🔒 Security & Reliability

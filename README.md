@@ -457,21 +457,33 @@ Tests are automatically run on every push to `main` or `develop` branches via Gi
 - Backend: Follow PEP 8, use type hints
 - Frontend: Follow ESLint rules, use functional components
 
-## 🔮 Future Improvements
+## 🚀 v1.2 Features (Short-term) ✅
 
-### Short-term
-- [ ] Add user authentication and multi-user support (API key tenant isolation is implemented; user accounts are not)
-- [ ] Implement document versioning
-- [ ] Add support for more file types (Excel, PowerPoint)
-- [ ] Improve chunking strategies (semantic chunking)
-- [ ] Add conversation history persistence
-- [ ] Implement document search/filtering
+### Implemented in v1.2.0
+- ✅ **Document Search/Filtering** - Filter documents by filename with `?q=search_term`
+- ✅ **Document Versioning** - Re-upload same filename creates versions; all queryable
+- ✅ **File Type Support** - Added Excel (.xlsx) and PowerPoint (.pptx) extraction
+- ✅ **Conversation History** - Persist and manage Q&A history per user/conversation
+  - Create conversations: `POST /conversations`
+  - Add messages: `POST /conversations/{id}/messages`
+  - List/retrieve/delete: `GET/DELETE /conversations`
+
+See [FEATURES.md](FEATURES.md) for detailed feature documentation.
+
+## 🔮 Future Improvements
 
 ### Medium-term
 - [ ] Support for multiple LLM providers (Anthropic, Cohere)
 - [ ] Fine-tuned embedding models
 - [ ] Advanced RAG techniques (re-ranking, query expansion)
 - [ ] Export conversations to PDF/Markdown
+- [ ] Semantic chunking strategies
+
+### Long-term
+- [ ] User accounts and team management
+- [ ] Document access sharing
+- [ ] Advanced analytics and usage tracking
+- [ ] Custom model fine-tuning
 - [ ] Batch document processing
 - [x] API rate limiting and API-key authentication
 
