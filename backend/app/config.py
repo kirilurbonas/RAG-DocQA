@@ -1,12 +1,14 @@
 """Application configuration with environment variable validation."""
 
 from typing import Optional, List
-from pydantic import BaseSettings, validator, Field
+from pydantic import BaseModel, field_validator, Field, ConfigDict
 import os
 
 
-class Settings(BaseSettings):
+class Settings(BaseModel):
     """Application settings with validation."""
+
+    model_config = ConfigDict(env_file=".env", case_sensitive=True)
 
     # Environment
     ENV: str = Field(default="development", description="Environment (development, staging, production)")
@@ -72,7 +74,8 @@ class Settings(BaseSettings):
     # Stats
     STATS_ALLOWED_ROLES: Optional[List[str]] = Field(default=None, description="Roles allowed to access stats")
 
-    @validator("ENV")
+    @field_validator("ENV")
+    @classmethod
     def validate_env(cls, v: str) -> str:
         """Validate environment value."""
         valid_envs = ["development", "staging", "production"]
@@ -80,7 +83,8 @@ class Settings(BaseSettings):
             raise ValueError(f"ENV must be one of {valid_envs}")
         return v
 
-    @validator("AUTH_MODE")
+    @field_validator("AUTH_MODE")
+    @classmethod
     def validate_auth_mode(cls, v: str) -> str:
         """Validate auth mode."""
         valid_modes = ["anonymous", "api_key", "jwt", "jwt_or_api_key"]
@@ -88,7 +92,8 @@ class Settings(BaseSettings):
             raise ValueError(f"AUTH_MODE must be one of {valid_modes}")
         return v
 
-    @validator("LLM_PROVIDER")
+    @field_validator("LLM_PROVIDER")
+    @classmethod
     def validate_llm_provider(cls, v: str) -> str:
         """Validate LLM provider."""
         valid_providers = ["openai", "local"]
@@ -96,7 +101,8 @@ class Settings(BaseSettings):
             raise ValueError(f"LLM_PROVIDER must be one of {valid_providers}")
         return v
 
-    @validator("MAX_UPLOAD_BYTES")
+    @field_validator("MAX_UPLOAD_BYTES")
+    @classmethod
     def validate_max_upload(cls, v: int) -> int:
         """Validate max upload size."""
         if v < 1024:  # At least 1KB
@@ -105,7 +111,8 @@ class Settings(BaseSettings):
             raise ValueError("MAX_UPLOAD_BYTES must not exceed 100MB")
         return v
 
-    @validator("CHUNK_SIZE")
+    @field_validator("CHUNK_SIZE")
+    @classmethod
     def validate_chunk_size(cls, v: int) -> int:
         """Validate chunk size."""
         if v < 100:
@@ -114,17 +121,13 @@ class Settings(BaseSettings):
             raise ValueError("CHUNK_SIZE must not exceed 10000")
         return v
 
-    @validator("PORT")
+    @field_validator("PORT")
+    @classmethod
     def validate_port(cls, v: int) -> int:
         """Validate port number."""
         if v < 1024 or v > 65535:
             raise ValueError("PORT must be between 1024 and 65535")
         return v
-
-    class Config:
-        """Pydantic config."""
-        env_file = ".env"
-        case_sensitive = True
 
 
 def get_settings() -> Settings:
@@ -138,5 +141,7 @@ def get_settings() -> Settings:
     return _settings
 
 
-# Load settings on module import
-settings = get_settings()
+# Lazy-load settings (only when get_settings() is called)
+# This avoids import-time validation errors if pydantic is not installed
+# and allows the app to start without full validation
+_settings = None
