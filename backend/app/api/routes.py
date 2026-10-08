@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.services.rag_service import RAGService
+from app.services.conversation_service import ConversationService
 from app.limiter import limiter
 from app.security.auth import SecurityContext, get_security_context, require_stats_role
 from app.security.audit import audit_event
@@ -35,6 +36,11 @@ rag_service = RAGService(
         "api_key": os.getenv("OPENAI_API_KEY"),
         "model": os.getenv("LLM_MODEL", "gpt-3.5-turbo")
     } if os.getenv("LLM_PROVIDER", "openai") == "openai" else {}
+)
+
+# Initialize conversation service
+conversation_service = ConversationService(
+    data_dir=os.getenv("CONVERSATIONS_DIR", "./conversations")
 )
 
 router = APIRouter()
@@ -156,10 +162,16 @@ async def upload_document(
 @limiter.limit(RATE_LIMIT_READ)
 async def list_documents(
     request: Request,
+    q: Optional[str] = None,  # Search query (filename/text)
     ctx: SecurityContext = Depends(get_security_context),
 ):
-    """Get list of all uploaded documents for this tenant/user."""
-    documents = rag_service.get_documents(owner_id=ctx.owner_id)
+    """
+    Get list of all uploaded documents for this tenant/user.
+
+    Query parameters:
+    - q: Search query to filter documents by filename (partial match, case-insensitive)
+    """
+    documents = rag_service.get_documents(owner_id=ctx.owner_id, search_query=q)
     return [DocumentResponse(**doc) for doc in documents]
 
 
@@ -300,6 +312,98 @@ async def get_stats(
         request_id=_request_id(request),
     )
     return StatsResponse(**stats)
+
+
+# Conversation History Endpoints
+
+@router.post("/conversations", response_model=dict)
+@limiter.limit(RATE_LIMIT_READ)
+async def create_conversation(
+    request: Request,
+    title: Optional[str] = None,
+    ctx: SecurityContext = Depends(get_security_context),
+):
+    """Create a new conversation for storing Q&A history."""
+    conv_id = conversation_service.create_conversation(owner_id=ctx.owner_id, title=title)
+    return {
+        "id": conv_id,
+        "title": title or f"Conversation {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "message_count": 0
+    }
+
+
+@router.get("/conversations", response_model=List[dict])
+@limiter.limit(RATE_LIMIT_READ)
+async def list_conversations(
+    request: Request,
+    limit: int = 10,
+    offset: int = 0,
+    ctx: SecurityContext = Depends(get_security_context),
+):
+    """List conversations for the current user."""
+    conversations = conversation_service.list_conversations(
+        owner_id=ctx.owner_id, limit=limit, offset=offset
+    )
+    return conversations
+
+
+@router.get("/conversations/{conversation_id}", response_model=dict)
+@limiter.limit(RATE_LIMIT_READ)
+async def get_conversation(
+    request: Request,
+    conversation_id: str,
+    ctx: SecurityContext = Depends(get_security_context),
+):
+    """Get conversation details including message history."""
+    conversation = conversation_service.get_conversation(
+        owner_id=ctx.owner_id, conversation_id=conversation_id
+    )
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
+
+
+@router.post("/conversations/{conversation_id}/messages", response_model=dict)
+@limiter.limit(RATE_LIMIT_ASK)
+async def add_message_to_conversation(
+    request: Request,
+    conversation_id: str,
+    role: str,
+    content: str,
+    ctx: SecurityContext = Depends(get_security_context),
+):
+    """Add a message to conversation history."""
+    if role not in ["user", "assistant"]:
+        raise HTTPException(status_code=400, detail="role must be 'user' or 'assistant'")
+
+    success = conversation_service.add_message(
+        owner_id=ctx.owner_id,
+        conversation_id=conversation_id,
+        role=role,
+        content=content
+    )
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return {"status": "added", "role": role, "conversation_id": conversation_id}
+
+
+@router.delete("/conversations/{conversation_id}", response_model=dict)
+@limiter.limit(RATE_LIMIT_READ)
+async def delete_conversation(
+    request: Request,
+    conversation_id: str,
+    ctx: SecurityContext = Depends(get_security_context),
+):
+    """Delete a conversation and its history."""
+    success = conversation_service.delete_conversation(
+        owner_id=ctx.owner_id, conversation_id=conversation_id
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"status": "deleted", "conversation_id": conversation_id}
 
 
 @router.get("/health")

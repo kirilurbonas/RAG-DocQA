@@ -138,15 +138,35 @@ class RAGService:
             ids=ids
         )
 
+        # Check for existing document with same filename (for versioning)
+        version = 1
+        existing_docs = [
+            doc for doc in self.documents.values()
+            if doc.get("owner_id") == owner_id and doc.get("filename") == filename
+        ]
+        if existing_docs:
+            # Get max version number and increment
+            max_version = max(doc.get("version", 1) for doc in existing_docs)
+            version = max_version + 1
+
         # Store document metadata
         self.documents[document_id] = {
             'id': document_id,
             'owner_id': owner_id,
             'filename': filename,
-            'uploaded_at': datetime.utcnow().isoformat(),
+            'version': version,
+            'uploaded_at': datetime.now(timezone.utc).isoformat(),
             'chunk_count': len(chunks),
-            'text_length': len(text)
+            'text_length': len(text),
+            'is_latest': True  # Mark this as the latest version
         }
+
+        # Mark previous versions as not latest (if there are any)
+        for doc_id, doc in self.documents.items():
+            if (doc_id != document_id and
+                doc.get("owner_id") == owner_id and
+                doc.get("filename") == filename):
+                doc['is_latest'] = False
 
         # Persist to disk
         self._save_document_registry()
@@ -429,13 +449,43 @@ class RAGService:
         ):
             yield token
     
-    def get_documents(self, owner_id: str = "anonymous") -> List[Dict]:
-        """Get list of all uploaded documents."""
-        return [
+    def get_documents(self, owner_id: str = "anonymous", search_query: Optional[str] = None,
+                      latest_only: bool = True) -> List[Dict]:
+        """
+        Get list of all uploaded documents.
+
+        Args:
+            owner_id: Filter by owner
+            search_query: Optional search term to filter by filename (case-insensitive partial match)
+            latest_only: If True, return only latest version of each document
+
+        Returns:
+            List of document info dicts, sorted by upload date (newest first)
+        """
+        docs = [
             {k: v for k, v in doc.items() if k != "owner_id"}
             for doc in self.documents.values()
             if doc.get("owner_id") == owner_id
         ]
+
+        # Filter to latest versions only if requested
+        if latest_only:
+            # Group by filename and keep only latest version
+            latest_docs = {}
+            for doc in docs:
+                key = doc.get("filename", "unknown")
+                if key not in latest_docs or doc.get("version", 1) > latest_docs[key].get("version", 1):
+                    latest_docs[key] = doc
+            docs = list(latest_docs.values())
+
+        # Apply search filter
+        if search_query:
+            search_lower = search_query.lower()
+            docs = [d for d in docs if search_lower in d.get("filename", "").lower()]
+
+        # Sort by upload date (newest first)
+        docs.sort(key=lambda d: d.get("uploaded_at", ""), reverse=True)
+        return docs
     
     def get_document(self, document_id: str, owner_id: str = "anonymous") -> Optional[Dict]:
         """Get a specific document by ID."""
