@@ -51,6 +51,7 @@ class QuestionRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     document_ids: Optional[List[str]] = Field(default=None, max_length=100)
     top_k: int = Field(default=5, ge=1, le=20)
+    conversation_id: Optional[str] = Field(default=None)  # Load history from this conversation
 
     @field_validator("document_ids")
     @classmethod
@@ -71,12 +72,26 @@ class QuestionResponse(BaseModel):
     metadata: dict
 
 
+class MessageIn(BaseModel):
+    role: str = Field(default="user")  # "user" or "assistant"
+    content: str = Field(min_length=1, max_length=10000)
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, value: str) -> str:
+        if value not in ["user", "assistant"]:
+            raise ValueError("role must be 'user' or 'assistant'")
+        return value
+
+
 class DocumentResponse(BaseModel):
     id: str
     filename: str
     uploaded_at: str
     chunk_count: int
     text_length: int
+    version: int = 1
+    is_latest: bool = True
 
 
 class StatsResponse(BaseModel):
@@ -163,6 +178,9 @@ async def upload_document(
 async def list_documents(
     request: Request,
     q: Optional[str] = None,  # Search query (filename/text)
+    latest_only: bool = True,  # Only return latest version of each document
+    limit: int = 10,  # Max results to return
+    offset: int = 0,  # Pagination offset
     ctx: SecurityContext = Depends(get_security_context),
 ):
     """
@@ -170,9 +188,14 @@ async def list_documents(
 
     Query parameters:
     - q: Search query to filter documents by filename (partial match, case-insensitive)
+    - latest_only: Return only latest version of each document (default: true)
+    - limit: Max results to return (default: 10)
+    - offset: Pagination offset (default: 0)
     """
-    documents = rag_service.get_documents(owner_id=ctx.owner_id, search_query=q)
-    return [DocumentResponse(**doc) for doc in documents]
+    documents = rag_service.get_documents(owner_id=ctx.owner_id, search_query=q, latest_only=latest_only)
+    # Apply pagination
+    paginated = documents[offset : offset + limit]
+    return [DocumentResponse(**doc) for doc in paginated]
 
 
 @router.get("/documents/{document_id}", response_model=DocumentResponse)
@@ -223,8 +246,20 @@ async def ask_question(
     Ask a question about the uploaded documents.
 
     The system will search for relevant information and generate an answer.
+
+    Optional: Pass conversation_id to include conversation history in the context.
     """
     try:
+        # Load conversation history if provided
+        conversation_history = None
+        if body.conversation_id:
+            conversation = conversation_service.get_conversation(
+                owner_id=ctx.owner_id,
+                conversation_id=body.conversation_id
+            )
+            if conversation:
+                conversation_history = conversation.get("messages", [])
+
         if AUDIT_ASK:
             audit_event(
                 "qa.ask",
@@ -232,13 +267,14 @@ async def ask_question(
                 tenant_id=ctx.tenant_id,
                 auth_method=ctx.auth_method,
                 request_id=_request_id(request),
-                extra={"top_k": body.top_k, "scoped_docs": bool(body.document_ids)},
+                extra={"top_k": body.top_k, "scoped_docs": bool(body.document_ids), "conversation": bool(body.conversation_id)},
             )
         result = await rag_service.answer_question(
             question=body.question,
             document_ids=body.document_ids,
             top_k=body.top_k,
             owner_id=ctx.owner_id,
+            conversation_history=conversation_history,
         )
         return QuestionResponse(**result)
     except Exception as exc:
@@ -257,7 +293,19 @@ async def ask_question_stream(
     Ask a question and stream the response.
 
     Returns a streaming response with answer tokens.
+
+    Optional: Pass conversation_id to include conversation history in the context.
     """
+    # Load conversation history if provided
+    conversation_history = None
+    if body.conversation_id:
+        conversation = conversation_service.get_conversation(
+            owner_id=ctx.owner_id,
+            conversation_id=body.conversation_id
+        )
+        if conversation:
+            conversation_history = conversation.get("messages", [])
+
     if AUDIT_ASK:
         audit_event(
             "qa.ask_stream",
@@ -265,7 +313,7 @@ async def ask_question_stream(
             tenant_id=ctx.tenant_id,
             auth_method=ctx.auth_method,
             request_id=_request_id(request),
-            extra={"top_k": body.top_k, "scoped_docs": bool(body.document_ids)},
+            extra={"top_k": body.top_k, "scoped_docs": bool(body.document_ids), "conversation": bool(body.conversation_id)},
         )
 
     async def generate():
@@ -275,6 +323,7 @@ async def ask_question_stream(
                 document_ids=body.document_ids,
                 top_k=body.top_k,
                 owner_id=ctx.owner_id,
+                conversation_history=conversation_history,
             ):
                 # JSON-encode token to preserve newlines and special characters
                 payload = json.dumps({"token": token, "error": None})
@@ -369,25 +418,21 @@ async def get_conversation(
 async def add_message_to_conversation(
     request: Request,
     conversation_id: str,
-    role: str,
-    content: str,
+    message: MessageIn,
     ctx: SecurityContext = Depends(get_security_context),
 ):
     """Add a message to conversation history."""
-    if role not in ["user", "assistant"]:
-        raise HTTPException(status_code=400, detail="role must be 'user' or 'assistant'")
-
     success = conversation_service.add_message(
         owner_id=ctx.owner_id,
         conversation_id=conversation_id,
-        role=role,
-        content=content
+        role=message.role,
+        content=message.content
     )
 
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    return {"status": "added", "role": role, "conversation_id": conversation_id}
+    return {"status": "added", "role": message.role, "conversation_id": conversation_id}
 
 
 @router.delete("/conversations/{conversation_id}", response_model=dict)
