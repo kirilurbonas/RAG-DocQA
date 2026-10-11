@@ -276,6 +276,22 @@ async def ask_question(
             owner_id=ctx.owner_id,
             conversation_history=conversation_history,
         )
+
+        # Persist the turn to conversation if conversation_id provided
+        if body.conversation_id:
+            conversation_service.add_message(
+                owner_id=ctx.owner_id,
+                conversation_id=body.conversation_id,
+                role="user",
+                content=body.question
+            )
+            conversation_service.add_message(
+                owner_id=ctx.owner_id,
+                conversation_id=body.conversation_id,
+                role="assistant",
+                content=result.get("answer", "")
+            )
+
         return QuestionResponse(**result)
     except Exception as exc:
         logger.exception("Failed to generate answer")
@@ -317,6 +333,7 @@ async def ask_question_stream(
         )
 
     async def generate():
+        collected_response = ""
         try:
             async for token in rag_service.stream_answer(
                 question=body.question,
@@ -325,9 +342,25 @@ async def ask_question_stream(
                 owner_id=ctx.owner_id,
                 conversation_history=conversation_history,
             ):
+                collected_response += token
                 # JSON-encode token to preserve newlines and special characters
                 payload = json.dumps({"token": token, "error": None})
                 yield f"data: {payload}\n\n"
+
+            # Persist the turn to conversation if conversation_id provided
+            if body.conversation_id and collected_response:
+                conversation_service.add_message(
+                    owner_id=ctx.owner_id,
+                    conversation_id=body.conversation_id,
+                    role="user",
+                    content=body.question
+                )
+                conversation_service.add_message(
+                    owner_id=ctx.owner_id,
+                    conversation_id=body.conversation_id,
+                    role="assistant",
+                    content=collected_response
+                )
         except Exception as exc:
             logger.exception("Failed to stream answer")
             # Send error as structured JSON
