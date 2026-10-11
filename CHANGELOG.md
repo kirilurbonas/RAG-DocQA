@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2025-10-11
+
+### Fixed
+
+**API Contract Stabilization:**
+- Fixed `DocumentResponse` missing `version` and `is_latest` fields
+- Added pagination parameters (`limit`, `offset`) to `GET /documents`
+- Changed conversation message endpoint to accept JSON body (`MessageIn` model)
+- Fixed conversation_id path parameter validation (UUID format checking)
+
+**Integration Improvements:**
+- Integrated conversation history loading into `/ask` and `/ask/stream` endpoints
+- Auto-persist user questions and assistant responses to conversation history
+- Pass conversation history to LLM for context-aware responses
+- Exclude non-latest document versions from default retrieval
+
+**Security Enhancements:**
+- Added zip-bomb/decompression-bomb guards for DOCX, XLSX, PPTX files
+- Validate uncompressed size before extraction to prevent DoS attacks
+- UUID validation for all conversation_id parameters (path traversal prevention)
+
+**Code Quality:**
+- Removed dead code (`app/config.py`)
+- Fixed deprecation warnings (`datetime.utcnow()` → `datetime.now(timezone.utc)`)
+- Fixed SentenceTransformer deprecation warning (`get_sentence_embedding_dimension()` fallback)
+- Migrated from `python-jose` to `PyJWT` for JWT operations
+- Fixed `AsyncOpenAI` import for proper test mocking
+
+### Test Results
+- 33/33 tests passing
+- 43% code coverage on app module
+- All integration tests verified
+- Python 3.14.4 compatibility verified
+
+---
+
 ## [1.2.0] - 2025-10-08
 
 ### Added

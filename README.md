@@ -4,15 +4,22 @@ An intelligent document question-answering system built with RAG (Retrieval-Augm
 
 ## 🚀 Features
 
-- **Document Processing**: Support for PDF, DOCX, Markdown, and TXT files
+### Core (v1.0+)
+- **Document Processing**: Support for PDF, DOCX, XLSX, PPTX, Markdown, and TXT files
 - **Intelligent Chunking**: Automatic text chunking with overlap for better context
 - **Vector Search**: Semantic search using embeddings and ChromaDB
-- **LLM Integration**: Support for OpenAI and local LLM models with timeout & retry handling
-- **Streaming Responses**: Real-time streaming of AI responses (fixed for multi-line text)
+- **LLM Integration**: OpenAI support with timeout & retry handling
+- **Streaming Responses**: Real-time streaming of AI responses
 - **Source Citations**: Track which documents and chunks were used for answers
-- **Modern UI**: Beautiful, responsive React frontend
 - **RESTful API**: FastAPI backend with comprehensive endpoints
 - **Docker Support**: Easy deployment with Docker Compose
+
+### v1.2+ Features
+- **Document Versioning**: Automatic version tracking for re-uploaded documents
+- **Search & Filtering**: Filter documents by filename with pagination
+- **Conversation History**: Persistent multi-turn conversation management with history
+- **Extended File Support**: Excel (.xlsx) and PowerPoint (.pptx) extraction
+- **Zip-bomb Protection**: Decompression bomb detection for Office file formats
 
 ### 🔒 Reliability & Production Features (v1.1+)
 
@@ -25,24 +32,29 @@ An intelligent document question-answering system built with RAG (Retrieval-Augm
 - **Enterprise Auth**: JWT, API key, and tenant isolation support
 - **Rate Limiting**: Per-endpoint rate limits with proper client IP detection
 
-## 🎯 Recent Improvements (v1.1)
+## 🎯 Recent Improvements (v1.2)
 
-**Critical Reliability Fixes:**
-- ✅ Fixed document data loss on restart (documents now persist)
-- ✅ Fixed event loop blocking (all I/O operations are now async)
-- ✅ Fixed streaming response text loss (JSON-encoded SSE frames)
-- ✅ Fixed rate limiting parameter bug (`_request` → `request`)
-- ✅ Added OpenAI timeout (30s) and retry handling (2x with backoff)
-- ✅ Upgraded dependencies with known CVE fixes
-- ✅ Implemented real health checks for all components
+**API Stabilization & Contract Fixes:**
+- ✅ Fixed DocumentResponse to include version and is_latest fields
+- ✅ Added pagination parameters (limit, offset) to GET /documents
+- ✅ Added document versioning and filtering (latest_only parameter)
+- ✅ Integrated conversation history into Q&A endpoints
+- ✅ Auto-persistence of Q&A turns to conversation history
+- ✅ UUID validation for conversation_id (path traversal prevention)
 
-**Testing & Quality:**
-- ✅ Added comprehensive pytest test suite (~500 lines)
-- ✅ Test coverage for auth, document processing, RAG service, API routes
-- ✅ CI/CD integration with automated test execution
-- ✅ Environment variable validation with Pydantic
+**Security Enhancements:**
+- ✅ Added zip-bomb/decompression-bomb guards for Office formats
+- ✅ Uncompressed size validation before extraction
+- ✅ Protection against DoS attacks from malicious archives
 
-For detailed information, see [IMPROVEMENTS.md](IMPROVEMENTS.md).
+**Code Quality:**
+- ✅ Removed dead code (config.py)
+- ✅ Fixed deprecation warnings (datetime.utcnow, SentenceTransformer)
+- ✅ PyJWT migration from deprecated python-jose
+- ✅ Excluded non-latest document versions from retrieval
+
+**v1.1 Improvements:**
+For earlier reliability improvements, see [IMPROVEMENTS.md](IMPROVEMENTS.md).
 
 ## 📋 Table of Contents
 
