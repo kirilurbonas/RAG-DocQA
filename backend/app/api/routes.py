@@ -10,9 +10,12 @@ from uuid import UUID
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.orm import Session
 
 from app.services.rag_service import RAGService
 from app.services.conversation_service import ConversationService
+from app.services.db_conversation_service import DbConversationService
+from app.backend_config import is_database_backend
 from app.limiter import limiter
 from app.security.auth import SecurityContext, get_security_context, require_stats_role
 from app.security.audit import audit_event
@@ -38,12 +41,32 @@ rag_service = RAGService(
     } if os.getenv("LLM_PROVIDER", "openai") == "openai" else {}
 )
 
-# Initialize conversation service
+# Initialize conversation service (for JSON backend)
 conversation_service = ConversationService(
     data_dir=os.getenv("CONVERSATIONS_DIR", "./conversations")
 )
 
 router = APIRouter()
+
+
+# Database dependency injection
+def get_db_session() -> Session:
+    """Get database session (only used for database backend)."""
+    if not is_database_backend():
+        return None
+    from app.db.database import SessionLocal
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_conversation_service(db: Optional[Session] = Depends(get_db_session)):
+    """Get conversation service (selects JSON or DB backend based on config)."""
+    if is_database_backend() and db:
+        return DbConversationService(db)
+    return conversation_service
 
 
 # Request/Response models
@@ -249,6 +272,7 @@ async def ask_question(
     request: Request,
     body: QuestionRequest,
     ctx: SecurityContext = Depends(get_security_context),
+    conv_service=Depends(get_conversation_service),
 ):
     """
     Ask a question about the uploaded documents.
@@ -262,7 +286,7 @@ async def ask_question(
         conversation_history = None
         if body.conversation_id:
             _validate_conversation_id(body.conversation_id)
-            conversation = conversation_service.get_conversation(
+            conversation = conv_service.get_conversation(
                 owner_id=ctx.owner_id,
                 conversation_id=body.conversation_id
             )
@@ -288,13 +312,13 @@ async def ask_question(
 
         # Persist the turn to conversation if conversation_id provided
         if body.conversation_id:
-            conversation_service.add_message(
+            conv_service.add_message(
                 owner_id=ctx.owner_id,
                 conversation_id=body.conversation_id,
                 role="user",
                 content=body.question
             )
-            conversation_service.add_message(
+            conv_service.add_message(
                 owner_id=ctx.owner_id,
                 conversation_id=body.conversation_id,
                 role="assistant",
@@ -313,6 +337,7 @@ async def ask_question_stream(
     request: Request,
     body: QuestionRequest,
     ctx: SecurityContext = Depends(get_security_context),
+    conv_service=Depends(get_conversation_service),
 ):
     """
     Ask a question and stream the response.
@@ -325,7 +350,7 @@ async def ask_question_stream(
     conversation_history = None
     if body.conversation_id:
         _validate_conversation_id(body.conversation_id)
-        conversation = conversation_service.get_conversation(
+        conversation = conv_service.get_conversation(
             owner_id=ctx.owner_id,
             conversation_id=body.conversation_id
         )
@@ -359,13 +384,13 @@ async def ask_question_stream(
 
             # Persist the turn to conversation if conversation_id provided
             if body.conversation_id and collected_response:
-                conversation_service.add_message(
+                conv_service.add_message(
                     owner_id=ctx.owner_id,
                     conversation_id=body.conversation_id,
                     role="user",
                     content=body.question
                 )
-                conversation_service.add_message(
+                conv_service.add_message(
                     owner_id=ctx.owner_id,
                     conversation_id=body.conversation_id,
                     role="assistant",
@@ -414,9 +439,10 @@ async def create_conversation(
     request: Request,
     title: Optional[str] = None,
     ctx: SecurityContext = Depends(get_security_context),
+    conv_service=Depends(get_conversation_service),
 ):
     """Create a new conversation for storing Q&A history."""
-    conv_id = conversation_service.create_conversation(owner_id=ctx.owner_id, title=title)
+    conv_id = conv_service.create_conversation(owner_id=ctx.owner_id, title=title)
     return {
         "id": conv_id,
         "title": title or f"Conversation {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
@@ -432,9 +458,10 @@ async def list_conversations(
     limit: int = 10,
     offset: int = 0,
     ctx: SecurityContext = Depends(get_security_context),
+    conv_service=Depends(get_conversation_service),
 ):
     """List conversations for the current user."""
-    conversations = conversation_service.list_conversations(
+    conversations = conv_service.list_conversations(
         owner_id=ctx.owner_id, limit=limit, offset=offset
     )
     return conversations
@@ -446,10 +473,11 @@ async def get_conversation(
     request: Request,
     conversation_id: str,
     ctx: SecurityContext = Depends(get_security_context),
+    conv_service=Depends(get_conversation_service),
 ):
     """Get conversation details including message history."""
     _validate_conversation_id(conversation_id)
-    conversation = conversation_service.get_conversation(
+    conversation = conv_service.get_conversation(
         owner_id=ctx.owner_id, conversation_id=conversation_id
     )
     if not conversation:
@@ -464,10 +492,11 @@ async def add_message_to_conversation(
     conversation_id: str,
     message: MessageIn,
     ctx: SecurityContext = Depends(get_security_context),
+    conv_service=Depends(get_conversation_service),
 ):
     """Add a message to conversation history."""
     _validate_conversation_id(conversation_id)
-    success = conversation_service.add_message(
+    success = conv_service.add_message(
         owner_id=ctx.owner_id,
         conversation_id=conversation_id,
         role=message.role,
@@ -486,10 +515,11 @@ async def delete_conversation(
     request: Request,
     conversation_id: str,
     ctx: SecurityContext = Depends(get_security_context),
+    conv_service=Depends(get_conversation_service),
 ):
     """Delete a conversation and its history."""
     _validate_conversation_id(conversation_id)
-    success = conversation_service.delete_conversation(
+    success = conv_service.delete_conversation(
         owner_id=ctx.owner_id, conversation_id=conversation_id
     )
     if not success:

@@ -16,6 +16,7 @@ from starlette.responses import PlainTextResponse, Response
 
 from app.api.routes import router
 from app.limiter import limiter
+from app.backend_config import is_database_backend
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -144,3 +145,28 @@ async def root():
         "docs": "/api/v1/docs" if docs_enabled else None,
         "metrics": "/metrics" if os.getenv("ENABLE_METRICS", "true").lower() == "true" else None,
     }
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database and run migrations if using database backend."""
+    if is_database_backend():
+        logger = logging.getLogger("app.startup")
+        try:
+            from app.db.database import SessionLocal, init_db
+            from app.db.migrate import run_migrations
+
+            logger.info("Initializing database...")
+            init_db()
+
+            logger.info("Running database migrations...")
+            db = SessionLocal()
+            try:
+                run_migrations(db)
+            finally:
+                db.close()
+
+            logger.info("Database initialization complete")
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+            raise
