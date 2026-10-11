@@ -87,6 +87,21 @@ class DocumentProcessor:
     def _extract_from_docx(content: bytes) -> str:
         """Extract text from DOCX file."""
         doc_file = BytesIO(content)
+
+        # Check for zip bomb/decompression bomb by validating uncompressed size
+        # DOCX files are ZIPs - enforce extracted size limits
+        try:
+            with zipfile.ZipFile(doc_file, 'r') as zip_ref:
+                total_uncompressed = sum(info.file_size for info in zip_ref.infolist())
+                if total_uncompressed > MAX_EXTRACTED_TEXT_CHARS:
+                    raise ValueError(
+                        f"DOCX file too large when uncompressed ({total_uncompressed} bytes); "
+                        f"maximum allowed is {MAX_EXTRACTED_TEXT_CHARS} bytes"
+                    )
+        except zipfile.BadZipFile as e:
+            raise ValueError(f"Invalid DOCX file format: {e}")
+
+        doc_file.seek(0)  # Reset file pointer after validation
         doc = docx.Document(doc_file)
         paragraphs = [para.text for para in doc.paragraphs]
         out = '\n'.join(paragraphs)
@@ -113,9 +128,23 @@ class DocumentProcessor:
             raise ValueError("openpyxl is required for Excel file support. Install with: pip install openpyxl")
 
         try:
-            # Check for zip bomb/decompression bomb by checking size
+            # Check for zip bomb/decompression bomb by validating uncompressed size
             # Excel files are ZIPs - enforce extracted size limits
             excel_file = BytesIO(content)
+
+            # Validate zip structure before loading
+            try:
+                with zipfile.ZipFile(excel_file, 'r') as zip_ref:
+                    total_uncompressed = sum(info.file_size for info in zip_ref.infolist())
+                    if total_uncompressed > MAX_EXTRACTED_TEXT_CHARS:
+                        raise ValueError(
+                            f"Excel file too large when uncompressed ({total_uncompressed} bytes); "
+                            f"maximum allowed is {MAX_EXTRACTED_TEXT_CHARS} bytes"
+                        )
+            except zipfile.BadZipFile as e:
+                raise ValueError(f"Invalid Excel file format: {e}")
+
+            excel_file.seek(0)  # Reset file pointer after validation
             workbook = openpyxl.load_workbook(excel_file, data_only=True)
 
             text_parts = []
@@ -145,9 +174,23 @@ class DocumentProcessor:
             raise ValueError("python-pptx is required for PowerPoint file support. Install with: pip install python-pptx")
 
         try:
-            # Check for zip bomb by checking size
+            # Check for zip bomb/decompression bomb by validating uncompressed size
             # PowerPoint files are ZIPs - enforce extracted size limits
             pptx_file = BytesIO(content)
+
+            # Validate zip structure before loading
+            try:
+                with zipfile.ZipFile(pptx_file, 'r') as zip_ref:
+                    total_uncompressed = sum(info.file_size for info in zip_ref.infolist())
+                    if total_uncompressed > MAX_EXTRACTED_TEXT_CHARS:
+                        raise ValueError(
+                            f"PowerPoint file too large when uncompressed ({total_uncompressed} bytes); "
+                            f"maximum allowed is {MAX_EXTRACTED_TEXT_CHARS} bytes"
+                        )
+            except zipfile.BadZipFile as e:
+                raise ValueError(f"Invalid PowerPoint file format: {e}")
+
+            pptx_file.seek(0)  # Reset file pointer after validation
             presentation = Presentation(pptx_file)
 
             text_parts = []
