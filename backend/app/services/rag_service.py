@@ -288,10 +288,11 @@ class RAGService:
                 ]
             }
         else:
+            # Get only latest versions of documents for this owner
             owned_doc_ids = [
                 doc_id
                 for doc_id, doc in self.documents.items()
-                if doc.get("owner_id") == owner_id
+                if doc.get("owner_id") == owner_id and doc.get("is_latest", True)
             ]
             if not owned_doc_ids:
                 return {
@@ -405,10 +406,11 @@ class RAGService:
                 ]
             }
         else:
+            # Get only latest versions of documents for this owner
             owned_doc_ids = [
                 doc_id
                 for doc_id, doc in self.documents.items()
-                if doc.get("owner_id") == owner_id
+                if doc.get("owner_id") == owner_id and doc.get("is_latest", True)
             ]
             if not owned_doc_ids:
                 yield "I couldn't find any relevant information in the documents to answer your question."
