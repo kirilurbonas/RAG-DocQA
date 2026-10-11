@@ -19,7 +19,11 @@ class EmbeddingModel:
         """
         self.model_name = model_name
         self.model = SentenceTransformer(model_name)
-        self.embedding_dim = self.model.get_sentence_embedding_dimension()
+        # Use get_embedding_dimension (newer) or fall back to get_sentence_embedding_dimension
+        if hasattr(self.model, 'get_embedding_dimension'):
+            self.embedding_dim = self.model.get_embedding_dimension()
+        else:
+            self.embedding_dim = self.model.get_sentence_embedding_dimension()
     
     def encode(self, texts: Union[str, List[str]], normalize: bool = True) -> np.ndarray:
         """

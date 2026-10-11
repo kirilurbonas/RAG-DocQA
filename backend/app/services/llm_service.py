@@ -4,6 +4,11 @@ from typing import List, Dict, Optional, AsyncIterator
 import os
 from abc import ABC, abstractmethod
 
+try:
+    from openai import AsyncOpenAI
+except ImportError:
+    AsyncOpenAI = None
+
 
 class LLMService(ABC):
     """Abstract base class for LLM services."""
@@ -51,9 +56,7 @@ class OpenAIService(LLMService):
             timeout: Request timeout in seconds
             max_retries: Maximum number of retries for failed requests
         """
-        try:
-            from openai import AsyncOpenAI
-        except ImportError:
+        if AsyncOpenAI is None:
             raise ImportError("openai package is required. Install with: pip install openai")
 
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")

@@ -1,15 +1,16 @@
 """Tests for authentication and security."""
 
 import pytest
+import jwt
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
-from jose import jwt
+from fastapi import HTTPException
 
 from app.security.auth import (
     get_security_context,
     SecurityContext,
-    decode_jwt,
-    get_owner_id
+    _decode_jwt,
+    _stable_owner_id
 )
 
 
@@ -21,8 +22,29 @@ class TestJWTDecoding:
         secret = "test-secret"
         payload = {
             "sub": "user123",
-            "tenant": "tenant1",
+            "tenant_id": "tenant1",
             "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "iat": datetime.now(timezone.utc)
+        }
+        token = jwt.encode(payload, secret, algorithm="HS256")
+
+        import app.security.auth as auth_module
+        with patch.dict("os.environ", {
+            "JWT_SECRET": secret,
+            "JWT_ALGORITHM": "HS256"
+        }):
+            with patch.object(auth_module, "JWT_SECRET", secret):
+                with patch.object(auth_module, "JWT_ALGORITHM", "HS256"):
+                    decoded = _decode_jwt(token)
+                    assert decoded["sub"] == "user123"
+                    assert decoded["tenant_id"] == "tenant1"
+
+    def test_missing_exp_claim(self):
+        """Test that tokens without exp claim are rejected when exp is required."""
+        secret = "test-secret"
+        payload = {
+            "sub": "user123",
+            "tenant_id": "tenant1",
             "iat": datetime.now(timezone.utc)
         }
         token = jwt.encode(payload, secret, algorithm="HS256")
@@ -31,29 +53,9 @@ class TestJWTDecoding:
             "JWT_SECRET": secret,
             "JWT_ALGORITHM": "HS256"
         }):
-            decoded = decode_jwt(token)
-            assert decoded["sub"] == "user123"
-            assert decoded["tenant"] == "tenant1"
-
-    def test_missing_exp_claim(self):
-        """Test that tokens without exp claim are rejected when exp is required."""
-        secret = "test-secret"
-        payload = {
-            "sub": "user123",
-            "tenant": "tenant1",
-            "iat": datetime.now(timezone.utc)
-        }
-        token = jwt.encode(payload, secret, algorithm="HS256")
-
-        with patch.dict("os.environ", {
-            "JWT_SECRET": secret,
-            "JWT_ALGORITHM": "HS256",
-            "JWT_REQUIRE_EXP": "true"
-        }):
-            # Should raise or return None (depending on implementation)
-            result = decode_jwt(token)
-            # Implementation detail: should ideally reject
-            assert result is None or result.get("sub") is None
+            # _decode_jwt will raise HTTPException for invalid tokens
+            with pytest.raises(HTTPException):
+                _decode_jwt(token)
 
     def test_expired_token(self):
         """Test that expired tokens are rejected."""
@@ -68,9 +70,9 @@ class TestJWTDecoding:
             "JWT_SECRET": secret,
             "JWT_ALGORITHM": "HS256"
         }):
-            result = decode_jwt(token)
-            # Expired tokens should be rejected
-            assert result is None
+            # Expired tokens should raise HTTPException
+            with pytest.raises(HTTPException):
+                _decode_jwt(token)
 
 
 class TestOwnerIDDerivation:
@@ -86,9 +88,7 @@ class TestOwnerIDDerivation:
         expected_owner_id = hashlib.sha256(f"{tenant}::{sub}".encode()).hexdigest()[:32]
 
         # Test the derivation logic
-        from app.security.auth import _derive_owner_id
-
-        actual_owner_id = _derive_owner_id(tenant, sub)
+        actual_owner_id = _stable_owner_id(tenant, sub)
         assert actual_owner_id == expected_owner_id
 
     def test_default_tenant_when_missing(self):
@@ -99,8 +99,7 @@ class TestOwnerIDDerivation:
         import hashlib
         expected_owner_id = hashlib.sha256(f"_default::{sub}".encode()).hexdigest()[:32]
 
-        from app.security.auth import _derive_owner_id
-        actual_owner_id = _derive_owner_id("_default", sub)
+        actual_owner_id = _stable_owner_id("_default", sub)
         assert actual_owner_id == expected_owner_id
 
 
