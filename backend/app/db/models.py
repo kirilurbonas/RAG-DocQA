@@ -1,7 +1,7 @@
 """SQLAlchemy models for RAG-DocQA database."""
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Integer, Text, DateTime, Boolean, ForeignKey, Index, Float
+from sqlalchemy import Column, String, Integer, Text, DateTime, Boolean, ForeignKey, Index, Float, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -178,4 +178,82 @@ class Message(Base):
     # Index for message ordering
     __table_args__ = (
         Index('ix_messages_conversation_timestamp', 'conversation_id', 'timestamp'),
+    )
+
+
+class FineTuningJob(Base):
+    """Fine-tuning job tracking table for Phase 10."""
+
+    __tablename__ = "fine_tuning_jobs"
+
+    id = Column(String(36), primary_key=True, index=True)  # UUID
+    owner_id = Column(String(255), nullable=False, index=True)  # Multi-tenant isolation
+    job_name = Column(String(255), nullable=False)
+    model_type = Column(String(50), nullable=False)  # "llm" | "embedding" | "local_llm"
+    base_model = Column(String(255), nullable=False)  # e.g., gpt-3.5-turbo, all-MiniLM-L6-v2
+    provider = Column(String(50), nullable=False)  # "openai" | "anthropic" | "local" | "huggingface"
+    status = Column(String(50), nullable=False, default="pending")  # pending|training|completed|failed
+    dataset_source = Column(String(255), nullable=False, default="both")  # "documents"|"conversations"|"both"
+    document_ids = Column(JSON, nullable=True)  # Array of document UUIDs used for training
+    training_params = Column(JSON, nullable=False)  # {epochs, learning_rate, batch_size, max_tokens}
+    metrics = Column(JSON, nullable=True)  # {final_loss, accuracy, examples_trained}
+    external_job_id = Column(String(255), nullable=True)  # OpenAI/Anthropic job ID
+    artifact_path = Column(String(255), nullable=True)  # Local path or S3 URL
+    is_active = Column(Boolean, nullable=False, default=False)  # Model in use for RAG
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)  # Temporary models
+
+    # Relationships
+    training_examples = relationship("TrainingExample", back_populates="job", cascade="all, delete-orphan")
+    training_metrics = relationship("TrainingMetric", back_populates="job", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index('ix_fine_tuning_jobs_owner', 'owner_id'),
+        Index('ix_fine_tuning_jobs_status', 'status'),
+        Index('ix_fine_tuning_jobs_active', 'owner_id', 'is_active'),
+    )
+
+
+class TrainingExample(Base):
+    """Training examples extracted from documents/conversations."""
+
+    __tablename__ = "training_examples"
+
+    id = Column(String(36), primary_key=True, index=True)  # UUID
+    job_id = Column(String(36), ForeignKey('fine_tuning_jobs.id'), nullable=False, index=True)
+    example_type = Column(String(50), nullable=False)  # "prompt_completion"|"instruction"|"embedding_pair"
+    input_text = Column(Text, nullable=False)
+    expected_output = Column(Text, nullable=True)
+    source_document_id = Column(String(36), nullable=True)
+    source_conversation_id = Column(String(36), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    job = relationship("FineTuningJob", back_populates="training_examples")
+
+    __table_args__ = (
+        Index('ix_training_examples_job', 'job_id'),
+        Index('ix_training_examples_type', 'example_type'),
+    )
+
+
+class TrainingMetric(Base):
+    """Track fine-tuning progress metrics (loss, accuracy, etc.)."""
+
+    __tablename__ = "training_metrics"
+
+    id = Column(String(36), primary_key=True, index=True)  # UUID
+    job_id = Column(String(36), ForeignKey('fine_tuning_jobs.id'), nullable=False, index=True)
+    metric_type = Column(String(50), nullable=False)  # "loss"|"accuracy"|"validation_loss"
+    epoch = Column(Integer, nullable=False)
+    value = Column(Float, nullable=False)
+    recorded_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    job = relationship("FineTuningJob", back_populates="training_metrics")
+
+    __table_args__ = (
+        Index('ix_training_metrics_job_epoch', 'job_id', 'epoch'),
     )

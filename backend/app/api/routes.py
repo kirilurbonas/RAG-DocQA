@@ -16,11 +16,13 @@ from app.services.rag_service import RAGService
 from app.services.conversation_service import ConversationService
 from app.services.db_conversation_service import DbConversationService
 from app.services.conversation_exporter import ConversationExporter
+from app.services.fine_tuning_service import FineTuningService
 from app.backend_config import is_database_backend
 from app.limiter import limiter
 from app.security.auth import SecurityContext, get_security_context, require_stats_role
 from app.security.audit import audit_event
 from app.utils.safe_filename import sanitize_upload_filename
+from app.db.database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -644,3 +646,318 @@ async def health_check():
         status_code=status_code,
         media_type="application/json"
     )
+
+
+# ==================== Phase 10: Fine-tuning Endpoints ====================
+
+class FineTuningJobRequest(BaseModel):
+    """Request to create a fine-tuning job."""
+
+    job_name: str = Field(..., description="Human-readable job name")
+    model_type: str = Field(..., description="Type of model: 'llm', 'embedding', or 'local_llm'")
+    base_model: str = Field(..., description="Model being fine-tuned")
+    provider: str = Field(..., description="Provider: 'openai', 'anthropic', 'local', or 'huggingface'")
+    document_ids: Optional[List[str]] = Field(None, description="Specific documents for training (None = all)")
+    training_params: dict = Field(
+        default={"epochs": 2, "learning_rate": 1e-4, "batch_size": 16},
+        description="Training parameters"
+    )
+
+    @field_validator("model_type")
+    @classmethod
+    def validate_model_type(cls, v):
+        if v not in ["llm", "embedding", "local_llm"]:
+            raise ValueError("model_type must be 'llm', 'embedding', or 'local_llm'")
+        return v
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v):
+        if v not in ["openai", "anthropic", "local", "huggingface"]:
+            raise ValueError("provider must be 'openai', 'anthropic', 'local', or 'huggingface'")
+        return v
+
+
+class FineTuningJobResponse(BaseModel):
+    """Response with fine-tuning job details."""
+
+    job_id: str
+    job_name: str
+    model_type: str
+    base_model: str
+    provider: str
+    status: str
+    created_at: str
+    completed_at: Optional[str] = None
+    metrics: Optional[dict] = None
+    is_active: bool
+
+
+class TrainingDataPreviewRequest(BaseModel):
+    """Request to preview training data."""
+
+    model_type: str = Field(..., description="Type of model: 'llm', 'embedding', or 'local_llm'")
+    document_ids: Optional[List[str]] = Field(None, description="Specific documents (None = all)")
+
+
+class TrainingDataPreviewResponse(BaseModel):
+    """Preview of training data."""
+
+    examples_count: int
+    sample_examples: List[dict]
+    quality_score: float
+
+
+@router.post("/api/v1/fine-tuning/jobs", response_model=FineTuningJobResponse, tags=["fine-tuning"])
+@limiter.limit("5/hour")
+async def create_fine_tuning_job(
+    request: FineTuningJobRequest,
+    ctx: SecurityContext = Depends(get_security_context),
+    db: Session = Depends(SessionLocal)
+):
+    """Create a new fine-tuning job.
+
+    Requires authentication. Fine-tuned models are isolated per user via owner_id.
+    """
+    try:
+        fine_tuning_service = FineTuningService(db)
+
+        # Extract training data
+        training_data = await fine_tuning_service.extract_training_data(
+            owner_id=ctx.owner_id,
+            model_type=request.model_type,
+            document_ids=request.document_ids
+        )
+
+        if not training_data:
+            raise HTTPException(status_code=400, detail="No training data found for specified documents")
+
+        # Create job
+        job = await fine_tuning_service.create_fine_tuning_job(
+            owner_id=ctx.owner_id,
+            job_name=request.job_name,
+            model_type=request.model_type,
+            base_model=request.base_model,
+            provider=request.provider,
+            training_data=training_data,
+            training_params=request.training_params,
+            document_ids=request.document_ids
+        )
+
+        # Audit event
+        await audit_event(
+            owner_id=ctx.owner_id,
+            action="fine_tuning_job_created",
+            resource="fine_tuning_job",
+            resource_id=job.id,
+            details={"model_type": request.model_type, "examples": len(training_data)}
+        )
+
+        return FineTuningJobResponse(
+            job_id=job.id,
+            job_name=job.job_name,
+            model_type=job.model_type,
+            base_model=job.base_model,
+            provider=job.provider,
+            status=job.status,
+            created_at=job.created_at.isoformat(),
+            is_active=job.is_active
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error creating fine-tuning job: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/v1/fine-tuning/jobs", response_model=List[FineTuningJobResponse], tags=["fine-tuning"])
+@limiter.limit("100/hour")
+async def list_fine_tuning_jobs(
+    status: Optional[str] = None,
+    ctx: SecurityContext = Depends(get_security_context),
+    db: Session = Depends(SessionLocal)
+):
+    """List all fine-tuning jobs for the current user."""
+    try:
+        fine_tuning_service = FineTuningService(db)
+        jobs = await fine_tuning_service.list_jobs(owner_id=ctx.owner_id, status=status)
+
+        return [
+            FineTuningJobResponse(
+                job_id=job.id,
+                job_name=job.job_name,
+                model_type=job.model_type,
+                base_model=job.base_model,
+                provider=job.provider,
+                status=job.status,
+                created_at=job.created_at.isoformat(),
+                completed_at=job.completed_at.isoformat() if job.completed_at else None,
+                metrics=job.metrics,
+                is_active=job.is_active
+            )
+            for job in jobs
+        ]
+    except Exception as e:
+        logger.error(f"Error listing fine-tuning jobs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/v1/fine-tuning/jobs/{job_id}", response_model=FineTuningJobResponse, tags=["fine-tuning"])
+@limiter.limit("100/hour")
+async def get_fine_tuning_job(
+    job_id: str,
+    ctx: SecurityContext = Depends(get_security_context),
+    db: Session = Depends(SessionLocal)
+):
+    """Get detailed status of a fine-tuning job."""
+    try:
+        fine_tuning_service = FineTuningService(db)
+        job = await fine_tuning_service.get_job_status(owner_id=ctx.owner_id, job_id=job_id)
+
+        return FineTuningJobResponse(
+            job_id=job.id,
+            job_name=job.job_name,
+            model_type=job.model_type,
+            base_model=job.base_model,
+            provider=job.provider,
+            status=job.status,
+            created_at=job.created_at.isoformat(),
+            completed_at=job.completed_at.isoformat() if job.completed_at else None,
+            metrics=job.metrics,
+            is_active=job.is_active
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error getting fine-tuning job: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/v1/fine-tuning/jobs/{job_id}/activate", tags=["fine-tuning"])
+@limiter.limit("10/hour")
+async def activate_fine_tuning_job(
+    job_id: str,
+    ctx: SecurityContext = Depends(get_security_context),
+    db: Session = Depends(SessionLocal)
+):
+    """Activate a fine-tuned model for RAG use."""
+    try:
+        fine_tuning_service = FineTuningService(db)
+        job = await fine_tuning_service.activate_job(owner_id=ctx.owner_id, job_id=job_id)
+
+        # Audit event
+        await audit_event(
+            owner_id=ctx.owner_id,
+            action="fine_tuning_job_activated",
+            resource="fine_tuning_job",
+            resource_id=job.id,
+            details={"model_type": job.model_type}
+        )
+
+        return {"message": "Model activated", "active_model_id": job.id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error activating fine-tuning job: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/v1/fine-tuning/jobs/{job_id}/deactivate", tags=["fine-tuning"])
+@limiter.limit("10/hour")
+async def deactivate_fine_tuning_job(
+    job_id: str,
+    ctx: SecurityContext = Depends(get_security_context),
+    db: Session = Depends(SessionLocal)
+):
+    """Deactivate a fine-tuned model (fall back to base model)."""
+    try:
+        fine_tuning_service = FineTuningService(db)
+        job = await fine_tuning_service.deactivate_job(owner_id=ctx.owner_id, job_id=job_id)
+
+        # Audit event
+        await audit_event(
+            owner_id=ctx.owner_id,
+            action="fine_tuning_job_deactivated",
+            resource="fine_tuning_job",
+            resource_id=job.id
+        )
+
+        return {"message": "Model deactivated"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deactivating fine-tuning job: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/api/v1/fine-tuning/jobs/{job_id}", tags=["fine-tuning"])
+@limiter.limit("10/hour")
+async def delete_fine_tuning_job(
+    job_id: str,
+    ctx: SecurityContext = Depends(get_security_context),
+    db: Session = Depends(SessionLocal)
+):
+    """Delete a fine-tuning job and its artifacts."""
+    try:
+        fine_tuning_service = FineTuningService(db)
+
+        # Verify ownership first
+        await fine_tuning_service.get_job_status(owner_id=ctx.owner_id, job_id=job_id)
+
+        # Delete
+        await fine_tuning_service.delete_job(owner_id=ctx.owner_id, job_id=job_id)
+
+        # Audit event
+        await audit_event(
+            owner_id=ctx.owner_id,
+            action="fine_tuning_job_deleted",
+            resource="fine_tuning_job",
+            resource_id=job_id
+        )
+
+        return {"message": "Job deleted"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting fine-tuning job: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/api/v1/fine-tuning/training-data/preview",
+    response_model=TrainingDataPreviewResponse,
+    tags=["fine-tuning"]
+)
+@limiter.limit("10/hour")
+async def preview_training_data(
+    request: TrainingDataPreviewRequest,
+    ctx: SecurityContext = Depends(get_security_context),
+    db: Session = Depends(SessionLocal)
+):
+    """Preview training data before launching a fine-tuning job."""
+    try:
+        fine_tuning_service = FineTuningService(db)
+
+        # Extract training data
+        training_data = await fine_tuning_service.extract_training_data(
+            owner_id=ctx.owner_id,
+            model_type=request.model_type,
+            document_ids=request.document_ids
+        )
+
+        if not training_data:
+            raise HTTPException(status_code=400, detail="No training data found")
+
+        # Calculate quality score (simple: based on data count)
+        quality_score = min(0.95, 0.5 + (len(training_data) / 100.0))
+
+        return TrainingDataPreviewResponse(
+            examples_count=len(training_data),
+            sample_examples=training_data[:3],  # Show first 3 examples
+            quality_score=quality_score
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error previewing training data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
