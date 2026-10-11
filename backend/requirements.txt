@@ -42,6 +42,9 @@ httpx>=0.25.0
 openpyxl>=3.0.0
 python-pptx>=0.6.0
 
+# Export functionality
+reportlab>=4.0.0
+
 # Numerical computing
 numpy>=2.0.0
 

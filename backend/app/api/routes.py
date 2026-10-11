@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.services.rag_service import RAGService
 from app.services.conversation_service import ConversationService
 from app.services.db_conversation_service import DbConversationService
+from app.services.conversation_exporter import ConversationExporter
 from app.backend_config import is_database_backend
 from app.limiter import limiter
 from app.security.auth import SecurityContext, get_security_context, require_stats_role
@@ -525,6 +526,81 @@ async def delete_conversation(
     if not success:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"status": "deleted", "conversation_id": conversation_id}
+
+
+@router.get("/conversations/{conversation_id}/export")
+@limiter.limit(RATE_LIMIT_READ)
+async def export_conversation(
+    request: Request,
+    conversation_id: str,
+    format: str = "markdown",
+    ctx: SecurityContext = Depends(get_security_context),
+    conv_service=Depends(get_conversation_service),
+):
+    """
+    Export a conversation to specified format.
+
+    Supported formats: markdown, pdf, json
+    """
+    _validate_conversation_id(conversation_id)
+
+    # Get conversation
+    conversation = conv_service.get_conversation(
+        owner_id=ctx.owner_id,
+        conversation_id=conversation_id
+    )
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Validate format
+    if format not in ["markdown", "pdf", "json"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid format. Supported: markdown, pdf, json"
+        )
+
+    try:
+        # Export conversation
+        content = ConversationExporter.export(conversation, format=format)
+        filename = ConversationExporter.get_export_filename(conversation, format)
+
+        # Determine media type
+        media_types = {
+            "markdown": "text/markdown",
+            "pdf": "application/pdf",
+            "json": "application/json"
+        }
+        media_type = media_types.get(format, "text/plain")
+
+        audit_event(
+            "conversation.export",
+            subject=ctx.subject,
+            tenant_id=ctx.tenant_id,
+            auth_method=ctx.auth_method,
+            resource_type="conversation",
+            resource_id=conversation_id,
+            request_id=_request_id(request),
+            extra={"format": format, "filename": filename}
+        )
+
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except ValueError as e:
+        logger.error(f"Failed to export conversation: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except ImportError as e:
+        logger.error(f"Export format not available: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Export format {format} not available: {str(e)}"
+        )
+    except Exception as e:
+        logger.exception(f"Failed to export conversation: {e}")
+        raise HTTPException(status_code=500, detail="Failed to export conversation")
 
 
 @router.get("/health")
