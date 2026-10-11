@@ -1,11 +1,121 @@
 """SQLAlchemy models for RAG-DocQA database."""
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Integer, Text, DateTime, Boolean, ForeignKey, Index
+from sqlalchemy import Column, String, Integer, Text, DateTime, Boolean, ForeignKey, Index, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
 Base = declarative_base()
+
+
+class User(Base):
+    """User account table."""
+
+    __tablename__ = "users"
+
+    id = Column(String(36), primary_key=True, index=True)  # UUID
+    email = Column(String(255), unique=True, nullable=False)
+    username = Column(String(255), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)  # argon2
+    is_active = Column(Boolean, nullable=False, default=True)
+    is_admin = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    last_login = Column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
+    teams = relationship("TeamMember", back_populates="user", cascade="all, delete-orphan")
+    usage_events = relationship("UsageEvent", back_populates="user", cascade="all, delete-orphan")
+
+
+class Team(Base):
+    """Team/organization table."""
+
+    __tablename__ = "teams"
+
+    id = Column(String(36), primary_key=True, index=True)  # UUID
+    name = Column(String(255), nullable=False)
+    owner_id = Column(String(36), ForeignKey('users.id'), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    members = relationship("TeamMember", back_populates="team", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index('ix_teams_owner', 'owner_id'),
+    )
+
+
+class TeamMember(Base):
+    """Team membership table."""
+
+    __tablename__ = "team_members"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    team_id = Column(String(36), ForeignKey('teams.id'), nullable=False, index=True)
+    user_id = Column(String(36), ForeignKey('users.id'), nullable=False, index=True)
+    role = Column(String(20), nullable=False, default='member')  # owner, admin, member
+    joined_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    team = relationship("Team", back_populates="members")
+    user = relationship("User", back_populates="teams")
+
+    __table_args__ = (
+        Index('ix_team_members_team_user', 'team_id', 'user_id'),
+    )
+
+
+class Share(Base):
+    """Document/conversation sharing table."""
+
+    __tablename__ = "shares"
+
+    id = Column(String(36), primary_key=True, index=True)  # UUID
+    resource_type = Column(String(20), nullable=False)  # document, conversation
+    resource_id = Column(String(36), nullable=False)
+    owner_id = Column(String(36), ForeignKey('users.id'), nullable=False, index=True)
+    shared_with_user_id = Column(String(36), ForeignKey('users.id'), nullable=True)
+    shared_with_team_id = Column(String(36), ForeignKey('teams.id'), nullable=True)
+    permission = Column(String(20), nullable=False, default='read')  # read, write
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Relationships - specify foreign_keys to disambiguate
+    owner = relationship("User", foreign_keys=[owner_id], viewonly=True)
+    shared_with_user = relationship("User", foreign_keys=[shared_with_user_id])
+
+    __table_args__ = (
+        Index('ix_shares_resource', 'resource_type', 'resource_id'),
+        Index('ix_shares_owner', 'owner_id'),
+        Index('ix_shares_user', 'shared_with_user_id'),
+        Index('ix_shares_team', 'shared_with_team_id'),
+    )
+
+
+class UsageEvent(Base):
+    """Usage tracking table."""
+
+    __tablename__ = "usage_events"
+
+    id = Column(String(36), primary_key=True, index=True)  # UUID
+    user_id = Column(String(36), ForeignKey('users.id'), nullable=False, index=True)
+    event_type = Column(String(50), nullable=False)  # ask, upload, export, etc
+    resource_type = Column(String(20), nullable=True)  # document, conversation
+    token_count = Column(Integer, nullable=True, default=0)
+    latency_ms = Column(Float, nullable=True)  # milliseconds
+    success = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    user = relationship("User", back_populates="usage_events")
+
+    __table_args__ = (
+        Index('ix_usage_events_user', 'user_id'),
+        Index('ix_usage_events_type', 'event_type'),
+        Index('ix_usage_events_created', 'created_at'),
+    )
 
 
 class Document(Base):

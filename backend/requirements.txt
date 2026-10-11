@@ -7,6 +7,7 @@ python-multipart>=0.0.6
 # Auth and security
 slowapi>=0.1.9
 PyJWT[crypto]>=2.8.0
+argon2-cffi>=23.1.0
 
 # Monitoring
 prometheus-fastapi-instrumentator>=6.0.0
