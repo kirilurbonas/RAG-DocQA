@@ -84,6 +84,14 @@ class MessageIn(BaseModel):
         return value
 
 
+def _validate_conversation_id(conversation_id: str) -> None:
+    """Validate conversation_id is a valid UUID format."""
+    try:
+        UUID(conversation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid conversation_id format") from exc
+
+
 class DocumentResponse(BaseModel):
     id: str
     filename: str
@@ -253,6 +261,7 @@ async def ask_question(
         # Load conversation history if provided
         conversation_history = None
         if body.conversation_id:
+            _validate_conversation_id(body.conversation_id)
             conversation = conversation_service.get_conversation(
                 owner_id=ctx.owner_id,
                 conversation_id=body.conversation_id
@@ -315,6 +324,7 @@ async def ask_question_stream(
     # Load conversation history if provided
     conversation_history = None
     if body.conversation_id:
+        _validate_conversation_id(body.conversation_id)
         conversation = conversation_service.get_conversation(
             owner_id=ctx.owner_id,
             conversation_id=body.conversation_id
@@ -438,6 +448,7 @@ async def get_conversation(
     ctx: SecurityContext = Depends(get_security_context),
 ):
     """Get conversation details including message history."""
+    _validate_conversation_id(conversation_id)
     conversation = conversation_service.get_conversation(
         owner_id=ctx.owner_id, conversation_id=conversation_id
     )
@@ -455,6 +466,7 @@ async def add_message_to_conversation(
     ctx: SecurityContext = Depends(get_security_context),
 ):
     """Add a message to conversation history."""
+    _validate_conversation_id(conversation_id)
     success = conversation_service.add_message(
         owner_id=ctx.owner_id,
         conversation_id=conversation_id,
@@ -476,6 +488,7 @@ async def delete_conversation(
     ctx: SecurityContext = Depends(get_security_context),
 ):
     """Delete a conversation and its history."""
+    _validate_conversation_id(conversation_id)
     success = conversation_service.delete_conversation(
         owner_id=ctx.owner_id, conversation_id=conversation_id
     )
