@@ -15,6 +15,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import PlainTextResponse, Response
 
 from app.api.routes import router
+from app.api.auth_routes import router as auth_router
+from app.api.team_routes import router as team_router
+from app.api.analytics_routes import router as analytics_router
 from app.limiter import limiter
 from app.backend_config import is_database_backend
 
@@ -133,6 +136,9 @@ if os.getenv("ENABLE_METRICS", "true").lower() == "true":
 
 # Enterprise API version (stable contract). Gateways should map /api/* -> /api/v1/*.
 app.include_router(router, prefix="/api/v1", tags=["api-v1"])
+app.include_router(auth_router, prefix="/api/v1", tags=["auth"])
+app.include_router(team_router, prefix="/api/v1", tags=["teams"])
+app.include_router(analytics_router, prefix="/api/v1", tags=["analytics"])
 
 
 @app.get("/")

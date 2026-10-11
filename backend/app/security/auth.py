@@ -8,6 +8,7 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import FrozenSet, Optional, Set
+from datetime import datetime, timedelta, timezone
 
 import jwt
 from fastapi import Depends, HTTPException, Request
@@ -321,3 +322,42 @@ def require_stats_role(ctx: SecurityContext = Depends(get_security_context)) -> 
     if not STATS_ALLOWED_ROLES.intersection(ctx.roles):
         raise HTTPException(status_code=403, detail="Insufficient permissions for this endpoint")
     return ctx
+
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Create JWT access token for local users."""
+    if not JWT_SECRET:
+        raise ValueError("JWT_SECRET not configured")
+
+    to_encode = data.copy()
+
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(hours=24)
+
+    to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc)})
+
+    encoded_jwt = jwt.encode(
+        to_encode,
+        JWT_SECRET,
+        algorithm="HS256"
+    )
+
+    return encoded_jwt
+
+
+async def get_current_user(ctx: SecurityContext = Depends(get_security_context)) -> dict:
+    """Get current user from security context."""
+    if ctx.auth_method == "anonymous" and not _allow_anonymous_access():
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    return {
+        "id": ctx.owner_id,
+        "subject": ctx.subject,
+        "tenant_id": ctx.tenant_id,
+        "roles": list(ctx.roles),
+        "auth_method": ctx.auth_method,
+        "is_admin": "admin" in ctx.roles,
+        "is_active": True
+    }
