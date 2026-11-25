@@ -773,6 +773,7 @@ async def create_fine_tuning_job(
 @router.get("/api/v1/fine-tuning/jobs", response_model=List[FineTuningJobResponse], tags=["fine-tuning"])
 @limiter.limit("100/hour")
 async def list_fine_tuning_jobs(
+    request: Request,
     status: Optional[str] = None,
     ctx: SecurityContext = Depends(get_security_context),
     db: Session = Depends(SessionLocal)
@@ -805,6 +806,7 @@ async def list_fine_tuning_jobs(
 @router.get("/api/v1/fine-tuning/jobs/{job_id}", response_model=FineTuningJobResponse, tags=["fine-tuning"])
 @limiter.limit("100/hour")
 async def get_fine_tuning_job(
+    request: Request,
     job_id: str,
     ctx: SecurityContext = Depends(get_security_context),
     db: Session = Depends(SessionLocal)
@@ -836,6 +838,7 @@ async def get_fine_tuning_job(
 @router.post("/api/v1/fine-tuning/jobs/{job_id}/activate", tags=["fine-tuning"])
 @limiter.limit("10/hour")
 async def activate_fine_tuning_job(
+    request: Request,
     job_id: str,
     ctx: SecurityContext = Depends(get_security_context),
     db: Session = Depends(SessionLocal)
@@ -865,6 +868,7 @@ async def activate_fine_tuning_job(
 @router.post("/api/v1/fine-tuning/jobs/{job_id}/deactivate", tags=["fine-tuning"])
 @limiter.limit("10/hour")
 async def deactivate_fine_tuning_job(
+    request: Request,
     job_id: str,
     ctx: SecurityContext = Depends(get_security_context),
     db: Session = Depends(SessionLocal)
@@ -893,6 +897,7 @@ async def deactivate_fine_tuning_job(
 @router.delete("/api/v1/fine-tuning/jobs/{job_id}", tags=["fine-tuning"])
 @limiter.limit("10/hour")
 async def delete_fine_tuning_job(
+    request: Request,
     job_id: str,
     ctx: SecurityContext = Depends(get_security_context),
     db: Session = Depends(SessionLocal)
